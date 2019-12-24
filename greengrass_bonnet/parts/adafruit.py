@@ -88,6 +88,8 @@ class JoyBonnet:
     ADS1015_REG_CONFIG_CHANNELS = (ADS1015_REG_CONFIG_MUX_SINGLE_0, ADS1015_REG_CONFIG_MUX_SINGLE_1, 
         ADS1015_REG_CONFIG_MUX_SINGLE_2, ADS1015_REG_CONFIG_MUX_SINGLE_3)
 
+    USER_MODE = ['user', 'local_angle', 'local']
+
     def __init__(self, pgio=None, i2c_bus=1, i2c_address=0x48, debug=False):
         self.key_map = {
             103: 'dpad_up',
@@ -143,6 +145,8 @@ class JoyBonnet:
         self.start = 0
         self.p1 = 0
         self.p2 = 0
+        self.user_mode_index = 0
+        self.recording = True
 
     def ads_read(self, channel):
         configword = self.ADS1015_REG_CONFIG_CQUE_NONE | \
@@ -216,8 +220,12 @@ class JoyBonnet:
             self.p2 = 1 if state else 0
         elif key_name == 'start':
             self.start = 1 if state else 0
+            if self.start == 1:
+                self.recording = not self.recording
         elif key_name == 'select':
             self.select = 1 if state else 0
+            if self.select == 1:
+                self.user_mode_index = (self.user_mode_index + 1) % self.USER_MODE
         elif key_name == 'x':
             self.x = 1 if state else 0
         elif key_name == 'y':
@@ -266,43 +274,84 @@ class JoyBonnet:
 
     def update(self):
         while True:
+            self.update_values()
+            time.sleep(0.01)
+
+    def update_values(self):
+        while True:
             try:
-                y = 800 - joy.ads_read(0)
-                x = joy.ads_read(1) - 800
+                y = 800 - self.ads_read(0)
+                x = self.ads_read(1) - 800
             except IOError:
                 continue
-            #print("(%d , %d)" % (x, y))
+        #print("(%d , %d)" % (x, y))
 
-            if (y > joy.ANALOG_THRESH_POS) and not joy.analog_states[0]:
-                joy.analog_states[0] = True
-                joy.handle_button(1000)      # send UP press
-            if (y < joy.ANALOG_THRESH_POS) and joy.analog_states[0]:
-                joy.analog_states[0] = False
-                joy.handle_button(1000)      # send UP release
-            if (y < joy.ANALOG_THRESH_NEG) and not joy.analog_states[1]:
-                joy.analog_states[1] = True
-                joy.handle_button(1001)      # send DOWN press
-            if (y > joy.ANALOG_THRESH_NEG) and joy.analog_states[1]:
-                joy.analog_states[1] = False
-                joy.handle_button(1001)      # send DOWN release
-            if (x < joy.ANALOG_THRESH_NEG) and not joy.analog_states[2]:
-                joy.analog_states[2] = True
-                joy.handle_button(1002)      # send LEFT press
-            if (x > joy.ANALOG_THRESH_NEG) and joy.analog_states[2]:
-                joy.analog_states[2] = False
-                joy.handle_button(1002)      # send LEFT release
-            if (x > joy.ANALOG_THRESH_POS) and not joy.analog_states[3]:
-                joy.analog_states[3] = True
-                joy.handle_button(1003)      # send RIGHT press
-            if (x < joy.ANALOG_THRESH_POS) and joy.analog_states[3]:
-                joy.analog_states[3] = False
-                joy.handle_button(1003)      # send RIGHT release
+        if (y > self.ANALOG_THRESH_POS) and not self.analog_states[0]:
+            self.analog_states[0] = True
+            self.handle_button(1000)      # send UP press
+        if (y < self.ANALOG_THRESH_POS) and self.analog_states[0]:
+            self.analog_states[0] = False
+            self.handle_button(1000)      # send UP release
+        if (y < self.ANALOG_THRESH_NEG) and not self.analog_states[1]:
+            self.analog_states[1] = True
+            self.handle_button(1001)      # send DOWN press
+        if (y > self.ANALOG_THRESH_NEG) and self.analog_states[1]:
+            self.analog_states[1] = False
+            self.handle_button(1001)      # send DOWN release
+        if (x < self.ANALOG_THRESH_NEG) and not self.analog_states[2]:
+            self.analog_states[2] = True
+            self.handle_button(1002)      # send LEFT press
+        if (x > self.ANALOG_THRESH_NEG) and self.analog_states[2]:
+            self.analog_states[2] = False
+            self.handle_button(1002)      # send LEFT release
+        if (x > self.ANALOG_THRESH_POS) and not self.analog_states[3]:
+            self.analog_states[3] = True
+            self.handle_button(1003)      # send RIGHT press
+        if (x < self.ANALOG_THRESH_POS) and self.analog_states[3]:
+            self.analog_states[3] = False
+            self.handle_button(1003)      # send RIGHT release
 
-            time.sleep(0.01)
 
     def run_threaded(self):
         return self.dpad_up, self.dpad_down, self.dpad_left, self.dpad_right, \
             self.x, self.y, self.a, self.b, self.select, self.start, self.p1, self.p2
+
+    def get_payload(self):
+        if self.dpad_up > 0:
+            user_throttle = 1.0
+        elif self.dpad_down > 0:
+            user_throttle = -1.0
+        else:
+            user_throttle = 0.0
+
+        if self.dpad_left > 0:
+            user_angle = 1.0
+        elif self.dpad_right > 0:
+            user_angle = -1.0
+        else:
+            user_angle = 0.0
+
+        if self.x > 0:
+            user_lift_throttle = 1.0
+        elif self.b > 0:
+            user_lift_throttle = -1.0
+        else:
+            user_lift_throttle = 0.0
+        
+        if self.y > 0 or self.a > 0:
+            user_throttle = 0.0
+            user_angle = 0.0
+            user_lift_throttle = 0.0
+
+        import json
+        return json.dumps({
+            'user/angle':           user_angle,
+            'user/throttle':        user_throttle,
+            'user/lift_throttle':   user_lift_throttle,
+            'user/mode':            self.USER_MODE[self.user_mode_index],
+            'recording':            self.recording,
+            'milliseconds':         int(round(time.time() * 1000)),
+        })
 
     def shutdown(self):
         """
