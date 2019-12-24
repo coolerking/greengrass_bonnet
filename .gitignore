@@ -111,3 +111,4 @@ tub/
 # site
 site/
 
+greengrass_bonnet/*.zip
